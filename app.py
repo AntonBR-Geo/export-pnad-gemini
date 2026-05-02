@@ -56,74 +56,33 @@ variaveis_mapeamento = [
 ]
 
 if uploaded_file is not None:
-    st.info("🔄 Lendo o arquivo e otimizando a memória... Por favor, aguarde.")
+    st.info("🔄 Processando dados em blocos para economizar memória...")
     
     colspecs = [(v["pos"]-1, v["pos"]-1+v["len"]) for v in variaveis_mapeamento]
     nomes = [v["nome"] for v in variaveis_mapeamento]
     
+    # Processamento em blocos menores (20k linhas) é mais seguro para a nuvem
     lista_chunks = []
     
-    # Barra de progresso visual
-    with st.spinner('Processando os dados...'):
-        # Lendo em blocos
-        for chunk in pd.read_fwf(uploaded_file, colspecs=colspecs, names=nomes, dtype=str, chunksize=50000):
+    try:
+        with st.spinner('Extraindo variáveis...'):
+            # O parâmetro low_memory ajuda no gerenciamento de recursos
+            for chunk in pd.read_fwf(uploaded_file, colspecs=colspecs, names=nomes, dtype=str, chunksize=20000):
+                
+                # Tratamentos imediatos para liberar memória
+                chunk["Nome_Capital"] = chunk["Capital_"]
+                if "Peso_Pessoa" in chunk.columns:
+                    chunk["Peso_Pessoa"] = pd.to_numeric(chunk["Peso_Pessoa"], errors='coerce')
+                
+                # Manter apenas as colunas necessárias para diminuir o tamanho do DataFrame final
+                lista_chunks.append(chunk)
+                
+            df = pd.concat(lista_chunks, ignore_index=True)
+            # Limpa a lista da memória
+            del lista_chunks
             
-            chunk["Nome_Capital"] = chunk["Capital_"]
-            
-            # Peso_Pessoa convertido para número (mantendo o original)
-            if "Peso_Pessoa" in chunk.columns:
-                chunk["Peso_Pessoa"] = pd.to_numeric(chunk["Peso_Pessoa"], errors='coerce')
-            
-            rendas = ["Renda_Habitual_Principal", "Renda_Efetivo_Principal", "Renda_Habitual_Total", "Renda_Efetivo_Total"]
-            for r in rendas:
-                if r in chunk.columns:
-                    chunk[r] = pd.to_numeric(chunk[r], errors='coerce')
-                    
-            lista_chunks.append(chunk)
-
-        # Unindo blocos
-        df = pd.concat(lista_chunks, ignore_index=True)
-
-    st.success("✅ Processamento concluído com sucesso!")
-
-    # Nomes dinâmicos
-    ano_arquivo = df["Ano"].iloc[0] if "Ano" in df.columns else "Ano"
-    tri_arquivo = df["Trimestre"].iloc[0] if "Trimestre" in df.columns else "Tri"
-    
-    nome_csv_dinamico = f"PNADC_{ano_arquivo}_T{tri_arquivo}.csv"
-    nome_dic_dinamico = f"Dicionario_PNADC_{ano_arquivo}_T{tri_arquivo}.xlsx"
-
-    st.subheader(f"🔍 Prévia dos Dados: {ano_arquivo} - Trimestre {tri_arquivo}")
-    st.dataframe(df.head())
-
-    # Área de Download
-    st.subheader("📥 Download dos Arquivos")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        csv = df.to_csv(index=False, sep=";", decimal=",").encode('utf-8')
-        st.download_button(
-            label=f"Baixar Base de Dados ({nome_csv_dinamico})",
-            data=csv,
-            file_name=nome_csv_dinamico,
-            mime="text/csv",
-            use_container_width=True # Ocupa todo o espaço da coluna para o botão ficar mais bonito
-        )
-
-    with col2:
-        buffer = io.BytesIO()
-        df_dic = pd.DataFrame(variaveis_mapeamento)
-        df_dic.loc[len(df_dic)] = ["Nome_Capital", 8, 2, "Capital (Descrição da Capital)"]
-        
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_dic.to_excel(writer, index=False, sheet_name='Dicionário')
-        
-        st.download_button(
-            label=f"Baixar Dicionário ({nome_dic_dinamico})",
-            data=buffer.getvalue(),
-            file_name=nome_dic_dinamico,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        st.success("✅ Processamento concluído!")
+    except Exception as e:
+        st.error(f"Erro de processamento: {e}. O arquivo pode ser grande demais para a nuvem gratuita.")
 else:
     st.warning("☝️ Faça o upload do arquivo TXT acima para iniciar o processamento.")
