@@ -7,21 +7,13 @@ st.set_page_config(page_title="Extrator PNAD Contínua", layout="centered")
 
 st.title("📊 Extrator de Microdados PNAD")
 st.markdown("""
-Esta ferramenta processa os arquivos brutos (.txt) do IBGE.
-**Atualizações:** Lê arquivos pesados em blocos, mantém o Peso Amostral bruto, salva arquivos dinamicamente e agora possui **layout centralizado**.
+Esta ferramenta processa os arquivos brutos (.txt) do IBGE para o seu e-book.
+**Configuração:** Peso Amostral bruto, processamento em blocos e salvamento dinâmico.
 """)
 
 st.divider() # Cria uma linha visual de separação
 
-# ---------------------------------------------------------
-# UPLOAD NA TELA CENTRAL (Sem st.sidebar)
-# ---------------------------------------------------------
-st.subheader("📁 Seleção de Arquivo")
-uploaded_file = st.file_uploader("Arraste e solte ou clique para selecionar o arquivo TXT da PNAD", type=["txt"])
-
-st.divider() # Outra linha de separação
-
-# 1. Definição das Variáveis
+# 1. Definição das Variáveis (Dicionário Técnico)
 variaveis_mapeamento = [
     {"nome": "Ano", "pos": 1, "len": 4, "desc": "Ano de referência"},
     {"nome": "Trimestre", "pos": 5, "len": 1, "desc": "Trimestre de referência"},
@@ -55,75 +47,72 @@ variaveis_mapeamento = [
     {"nome": "Renda_Efetivo_Total", "pos": 452, "len": 8, "desc": "Renda efetiva de todos os trabalhos"}
 ]
 
-if uploaded_file is not None:
-    st.info("🔄 Processando dados em blocos para economizar memória...")
-    
+# Interface de Upload
+st.subheader("📁 Seleção de Arquivo")
+uploaded_file = st.file_uploader("Selecione o arquivo TXT da PNAD Contínua", type=["txt"])
+
+@st.cache_data
+def processar_dados(file):
     colspecs = [(v["pos"]-1, v["pos"]-1+v["len"]) for v in variaveis_mapeamento]
     nomes = [v["nome"] for v in variaveis_mapeamento]
     
-    # Processamento em blocos menores (20k linhas) é mais seguro para a nuvem
-    lista_chunks = []
+    chunks = []
+    # Usamos um chunksize de 30.000 para equilibrar velocidade e RAM
+    for chunk in pd.read_fwf(file, colspecs=colspecs, names=nomes, dtype=str, chunksize=30000):
+        chunk["Nome_Capital"] = chunk["Capital_"]
+        
+        # Conversão numérica sem divisão (conforme solicitado)
+        if "Peso_Pessoa" in chunk.columns:
+            chunk["Peso_Pessoa"] = pd.to_numeric(chunk["Peso_Pessoa"], errors='coerce')
+        
+        rendas = ["Renda_Habitual_Principal", "Renda_Efetivo_Principal", "Renda_Habitual_Total", "Renda_Efetivo_Total"]
+        for r in rendas:
+            if r in chunk.columns:
+                chunk[r] = pd.to_numeric(chunk[r], errors='coerce')
+        
+        chunks.append(chunk)
     
+    df_final = pd.concat(chunks, ignore_index=True)
+    del chunks # Libera memória
+    gc.collect() # Força a limpeza do sistema
+    return df_final
+
+if uploaded_file is not None:
     try:
-        with st.spinner('Extraindo variáveis...'):
-            # O parâmetro low_memory ajuda no gerenciamento de recursos
-            for chunk in pd.read_fwf(uploaded_file, colspecs=colspecs, names=nomes, dtype=str, chunksize=20000):
-                
-                # Tratamentos imediatos para liberar memória
-                chunk["Nome_Capital"] = chunk["Capital_"]
-                if "Peso_Pessoa" in chunk.columns:
-                    chunk["Peso_Pessoa"] = pd.to_numeric(chunk["Peso_Pessoa"], errors='coerce')
-                
-                # Manter apenas as colunas necessárias para diminuir o tamanho do DataFrame final
-                lista_chunks.append(chunk)
-                
-            df = pd.concat(lista_chunks, ignore_index=True)
-            # Limpa a lista da memória
-            del lista_chunks
+        with st.status("Processando dados...", expanded=True) as status:
+            st.write("Lendo microdados em blocos...")
+            df = processar_dados(uploaded_file)
+            st.write("Gerando nomes dinâmicos...")
             
-        st.success("✅ Processamento concluído!")
-    
-    # Nomes dinâmicos
-    ano_arquivo = df["Ano"].iloc[0] if "Ano" in df.columns else "Ano"
-    tri_arquivo = df["Trimestre"].iloc[0] if "Trimestre" in df.columns else "Tri"
-    
-    nome_csv_dinamico = f"PNADC_{ano_arquivo}_T{tri_arquivo}.csv"
-    nome_dic_dinamico = f"Dicionario_PNADC_{ano_arquivo}_T{tri_arquivo}.xlsx"
+            ano = df["Ano"].iloc[0]
+            tri = df["Trimestre"].iloc[0]
+            status.update(label=f"Concluído! PNADC {ano} T{tri}", state="complete")
 
-    st.subheader(f"🔍 Prévia dos Dados: {ano_arquivo} - Trimestre {tri_arquivo}")
-    st.dataframe(df.head())
+        # Exibição
+        st.subheader(f"🔍 Prévia: {ano} - Trimestre {tri}")
+        st.dataframe(df.head(10))
 
-    # Área de Download
-    st.subheader("📥 Download dos Arquivos")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        csv = df.to_csv(index=False, sep=";", decimal=",").encode('utf-8')
-        st.download_button(
-            label=f"Baixar Base de Dados ({nome_csv_dinamico})",
-            data=csv,
-            file_name=nome_csv_dinamico,
-            mime="text/csv",
-            use_container_width=True # Ocupa todo o espaço da coluna para o botão ficar mais bonito
-        )
-
-    with col2:
-        buffer = io.BytesIO()
-        df_dic = pd.DataFrame(variaveis_mapeamento)
-        df_dic.loc[len(df_dic)] = ["Nome_Capital", 8, 2, "Capital (Descrição da Capital)"]
+        # Downloads
+        st.divider()
+        col1, col2 = st.columns(2)
         
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_dic.to_excel(writer, index=False, sheet_name='Dicionário')
-        
-        st.download_button(
-            label=f"Baixar Dicionário ({nome_dic_dinamico})",
-            data=buffer.getvalue(),
-            file_name=nome_dic_dinamico,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-    
+        csv_name = f"PNADC_{ano}_T{tri}.csv"
+        xlsx_name = f"Dicionario_PNADC_{ano}_T{tri}.xlsx"
+
+        with col1:
+            csv = df.to_csv(index=False, sep=";", decimal=",").encode('utf-8')
+            st.download_button(f"Baixar Base ({csv_name})", csv, csv_name, "text/csv", use_container_width=True)
+
+        with col2:
+            output = io.BytesIO()
+            df_dic = pd.DataFrame(variaveis_mapeamento)
+            df_dic.loc[len(df_dic)] = ["Nome_Capital", 8, 2, "Capital (Descrição da Capital)"]
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_dic.to_excel(writer, index=False, sheet_name='Dicionário')
+            st.download_button(f"Baixar Dicionário ({xlsx_name})", output.getvalue(), xlsx_name, use_container_width=True)
+
     except Exception as e:
-        st.error(f"Erro de processamento: {e}. O arquivo pode ser grande demais para a nuvem gratuita.")
+        st.error(f"Erro ao processar: {e}")
+        st.warning("Se o erro for de 'Memory', tente rodar este script localmente em seu PC.")
 else:
-    st.warning("☝️ Faça o upload do arquivo TXT acima para iniciar o processamento.")
+    st.info("Aguardando upload do arquivo para iniciar.")
