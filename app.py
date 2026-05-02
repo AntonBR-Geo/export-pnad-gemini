@@ -82,6 +82,47 @@ if uploaded_file is not None:
             del lista_chunks
             
         st.success("✅ Processamento concluído!")
+    
+    # Nomes dinâmicos
+    ano_arquivo = df["Ano"].iloc[0] if "Ano" in df.columns else "Ano"
+    tri_arquivo = df["Trimestre"].iloc[0] if "Trimestre" in df.columns else "Tri"
+    
+    nome_csv_dinamico = f"PNADC_{ano_arquivo}_T{tri_arquivo}.csv"
+    nome_dic_dinamico = f"Dicionario_PNADC_{ano_arquivo}_T{tri_arquivo}.xlsx"
+
+    st.subheader(f"🔍 Prévia dos Dados: {ano_arquivo} - Trimestre {tri_arquivo}")
+    st.dataframe(df.head())
+
+    # Área de Download
+    st.subheader("📥 Download dos Arquivos")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        csv = df.to_csv(index=False, sep=";", decimal=",").encode('utf-8')
+        st.download_button(
+            label=f"Baixar Base de Dados ({nome_csv_dinamico})",
+            data=csv,
+            file_name=nome_csv_dinamico,
+            mime="text/csv",
+            use_container_width=True # Ocupa todo o espaço da coluna para o botão ficar mais bonito
+        )
+
+    with col2:
+        buffer = io.BytesIO()
+        df_dic = pd.DataFrame(variaveis_mapeamento)
+        df_dic.loc[len(df_dic)] = ["Nome_Capital", 8, 2, "Capital (Descrição da Capital)"]
+        
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_dic.to_excel(writer, index=False, sheet_name='Dicionário')
+        
+        st.download_button(
+            label=f"Baixar Dicionário ({nome_dic_dinamico})",
+            data=buffer.getvalue(),
+            file_name=nome_dic_dinamico,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    
     except Exception as e:
         st.error(f"Erro de processamento: {e}. O arquivo pode ser grande demais para a nuvem gratuita.")
 else:
